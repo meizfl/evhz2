@@ -1,6 +1,3 @@
-/* Copyright (C) 2016 Ian Kelling */
-/* Licensed under the Apache License, Version 2.0 (the "License"); */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
