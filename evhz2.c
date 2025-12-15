@@ -1,3 +1,6 @@
+/* Copyright (C) 2016 Ian Kelling */
+/* Licensed under the Apache License, Version 2.0 (the "License"); */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,28 +56,20 @@ void sigint_handler(int sig) {
     quit = 1;
 }
 
-unsigned long long get_time_us() {
-    #ifdef _WIN32
-    LARGE_INTEGER freq, counter;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&counter);
-    return (unsigned long long)((counter.QuadPart * 1000000ULL) / freq.QuadPart);
-    #else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (unsigned long long)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000ULL;
-    #endif
-}
-
 void update_hz(event_t* evt, unsigned long long time) {
+    if (evt->prev_time == 0) {
+        evt->prev_time = time;
+        return;
+    }
+
     unsigned long long timediff = time - evt->prev_time;
     unsigned hz = 0;
 
     if (timediff != 0) {
-        hz = 1000000ULL / timediff;
+        hz = 8000ULL / timediff;
     }
 
-    if (hz > 0 && hz < 10000) {
+    if (hz > 0) {
         unsigned j, maxavg;
 
         evt->count++;
@@ -99,39 +94,128 @@ void update_hz(event_t* evt, unsigned long long time) {
 }
 
 #ifdef _WIN32
-void windows_poll_loop(event_t* events) {
-    POINT last_pos = {0, 0};
-    int mouse_initialized = 0;
+event_t win_mouse_event = {0};
+event_t win_keyboard_event = {0};
 
-    strcpy(events[0].name, "Mouse");
+LRESULT CALLBACK RawInputProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_INPUT) {
+        UINT size;
+        GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &size, sizeof(RAWINPUTHEADER));
 
-    printf("Move your mouse. Press ESC to exit.\n\n");
-
-    while (!quit) {
-        if (_kbhit() && _getch() == 27) {
-            quit = 1;
-            break;
+        LPBYTE buffer = (LPBYTE)malloc(size);
+        if (buffer == NULL) {
+            return 0;
         }
 
-        POINT pos;
-        if (GetCursorPos(&pos)) {
-            if (!mouse_initialized) {
-                last_pos = pos;
-                mouse_initialized = 1;
-                events[0].prev_time = get_time_us();
-            } else if (pos.x != last_pos.x || pos.y != last_pos.y) {
-                unsigned long long time = get_time_us();
-                update_hz(&events[0], time);
-                last_pos = pos;
+        if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, buffer, &size, sizeof(RAWINPUTHEADER)) != size) {
+            free(buffer);
+            return 0;
+        }
+
+        RAWINPUT* raw = (RAWINPUT*)buffer;
+
+        // Получаем timestamp из заголовка Raw Input (в единицах 125 микросекунд)
+        LARGE_INTEGER freq, counter;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&counter);
+
+        // Конвертируем в единицы 1/8000 секунды (как в Linux)
+        unsigned long long time = (counter.QuadPart * 8000ULL) / freq.QuadPart;
+
+        if (raw->header.dwType == RIM_TYPEMOUSE) {
+            if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
+                update_hz(&win_mouse_event, time);
+            }
+        } else if (raw->header.dwType == RIM_TYPEKEYBOARD) {
+            if (raw->data.keyboard.Message == WM_KEYDOWN || raw->data.keyboard.Message == WM_KEYUP) {
+                update_hz(&win_keyboard_event, time);
+            }
+        }
+
+        free(buffer);
+        return 0;
+    } else if (msg == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void windows_poll_loop() {
+    strcpy(win_mouse_event.name, "Mouse");
+    strcpy(win_keyboard_event.name, "Keyboard");
+
+    WNDCLASSEX wc = {0};
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.lpfnWndProc = RawInputProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "RawInputClass";
+
+    if (!RegisterClassEx(&wc)) {
+        fprintf(stderr, "Failed to register window class\n");
+        return;
+    }
+
+    HWND hwnd = CreateWindowEx(0, "RawInputClass", "RawInput", 0, 0, 0, 0, 0,
+                               HWND_MESSAGE, NULL, GetModuleHandle(NULL), NULL);
+
+    if (hwnd == NULL) {
+        fprintf(stderr, "Failed to create window\n");
+        return;
+    }
+
+    RAWINPUTDEVICE rid[2];
+
+    // Mouse
+    rid[0].usUsagePage = 0x01;
+    rid[0].usUsage = 0x02;
+    rid[0].dwFlags = RIDEV_INPUTSINK;
+    rid[0].hwndTarget = hwnd;
+
+    // Keyboard
+    rid[1].usUsagePage = 0x01;
+    rid[1].usUsage = 0x06;
+    rid[1].dwFlags = RIDEV_INPUTSINK;
+    rid[1].hwndTarget = hwnd;
+
+    if (!RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE))) {
+        fprintf(stderr, "Failed to register raw input devices\n");
+        DestroyWindow(hwnd);
+        return;
+    }
+
+    printf("Move your mouse or press keys. Press ESC to exit.\n\n");
+
+    MSG msg;
+    while (!quit) {
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                quit = 1;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
+        if (_kbhit()) {
+            int ch = _getch();
+            if (ch == 27) {
+                quit = 1;
             }
         }
 
         Sleep(1);
     }
 
-    if (events[0].avghz != 0) {
-        printf("\nAverage for %s: %5dHz\n", events[0].name, events[0].avghz);
+    if (win_mouse_event.avghz != 0) {
+        printf("\nAverage for %s: %5dHz\n", win_mouse_event.name, win_mouse_event.avghz);
     }
+    if (win_keyboard_event.avghz != 0) {
+        printf("Average for %s: %5dHz\n", win_keyboard_event.name, win_keyboard_event.avghz);
+    }
+
+    DestroyWindow(hwnd);
 }
 #endif
 
@@ -165,14 +249,11 @@ void linux_poll_loop(event_t* events, int max_event) {
             }
 
             if (event.type == EV_REL || event.type == EV_ABS) {
-                unsigned long long time = (unsigned long long)event.time.tv_sec * 1000000ULL;
-                time += (unsigned long long)event.time.tv_usec;
+                // Конвертируем в единицы 1/8000 секунды (как в оригинале)
+                unsigned long long time = (unsigned long long)event.time.tv_sec * 8000ULL;
+                time += (unsigned long long)event.time.tv_usec / 125ULL;
 
-                if (events[i].prev_time != 0) {
-                    update_hz(&events[i], time);
-                } else {
-                    events[i].prev_time = time;
-                }
+                update_hz(&events[i], time);
             }
         }
     }
@@ -191,6 +272,14 @@ void linux_poll_loop(event_t* events, int max_event) {
 #if defined(__APPLE__) || defined(__MACH__)
 event_t macos_event = {0};
 
+unsigned long long macos_get_time() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    unsigned long long time = (unsigned long long)ts.tv_sec * 8000ULL;
+    time += (unsigned long long)ts.tv_nsec / 125000ULL;
+    return time;
+}
+
 void macos_input_callback(void* context, IOReturn result, void* sender, IOHIDValueRef value) {
     (void)context;
     (void)result;
@@ -200,13 +289,8 @@ void macos_input_callback(void* context, IOReturn result, void* sender, IOHIDVal
     uint32_t usage_page = IOHIDElementGetUsagePage(element);
 
     if (usage_page == kHIDPage_GenericDesktop) {
-        unsigned long long time = get_time_us();
-
-        if (macos_event.prev_time != 0) {
-            update_hz(&macos_event, time);
-        } else {
-            macos_event.prev_time = time;
-        }
+        unsigned long long time = macos_get_time();
+        update_hz(&macos_event, time);
     }
 }
 
@@ -273,7 +357,7 @@ int main(int argc, char* argv[]) {
     memset(events, 0, sizeof(events));
 
     #ifdef _WIN32
-    windows_poll_loop(events);
+    windows_poll_loop();
     #elif defined(__APPLE__) || defined(__MACH__)
     macos_poll_loop();
     #elif defined(__linux__) || defined(__FreeBSD__)
