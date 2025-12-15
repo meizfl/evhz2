@@ -17,18 +17,11 @@ A simple cross-platform tool to measure the polling rate (events per second) of 
 - Graceful exit with Ctrl+C (or ESC on Windows)
 
 ## Build
-The program is written in pure C and uses only standard libraries plus platform-specific APIs.
+The program is written in pure Rust and uses only standard libraries plus platform-specific APIs.
 
 ```bash
 cargo run --release
 ```
-
-On macOS you may need to link CoreFoundation and IOKit:
-```bash
-cargo run --release
-```
-
-No external dependencies.
 
 ## Usage
 ```bash
