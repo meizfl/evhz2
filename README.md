@@ -20,12 +20,12 @@ A simple cross-platform tool to measure the polling rate (events per second) of 
 The program is written in pure C and uses only standard libraries plus platform-specific APIs.
 
 ```bash
-gcc -o evhz2 evhz2.c -lm
+cargo run --release
 ```
 
 On macOS you may need to link CoreFoundation and IOKit:
 ```bash
-gcc -o evhz2 evhz2.c -framework CoreFoundation -framework IOKit
+cargo run --release
 ```
 
 No external dependencies.
