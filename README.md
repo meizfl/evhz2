@@ -81,6 +81,6 @@ Average for Logitech G Pro Wireless Gaming Mouse:  1000Hz
 - The tool measures only relative/absolute movement events (EV_REL/EV_ABS). Button presses and other events are ignored for Hz calculation.
 
 ## License
-Feel free to use, modify, and distribute. No specific license — public domain / do whatever you want.
+This project is licensed under the GNU General Public License v3.0 — see the LICENSE file for details.
 
 Enjoy checking if your "8000 Hz" mouse is really delivering! 🖱️🚀
